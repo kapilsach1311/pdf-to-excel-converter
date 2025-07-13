@@ -13,52 +13,43 @@ DOWNLOAD_FOLDER = 'downloads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 
-@app.route("/")
-def index():
-    return render_template("index.html")
-
 @app.route("/upload", methods=["POST"])
-def upload():
-    if 'file' not in request.files:
-        flash("No file uploaded.")
-        return redirect("/")
-
-    file = request.files['file']
-    if file.filename == '':
-        flash("No selected file.")
-        return redirect("/")
-
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(filepath)
-
+def upload_file():
     try:
-        with pdfplumber.open(filepath) as pdf:
-            all_tables = []
+        file = request.files["file"]
+        if file and file.filename.endswith(".pdf"):
+            pdf = pdfplumber.open(file)
+            rows = []
             for page in pdf.pages:
                 tables = page.extract_tables()
                 for table in tables:
-                    df = pd.DataFrame(table)
-                    df.replace('', None, inplace=True)
-                    df.dropna(how='all', axis=0, inplace=True)
-                    df.dropna(how='all', axis=1, inplace=True)
+                    for row in table:
+                        if any(row):
+                            rows.append(row)
+            pdf.close()
 
-                    if df.shape[0] > 1:
-                        df.columns = df.iloc[0]
-                        df = df[1:]
+            if not rows:
+                flash("No tables found in the PDF.")
+                return redirect("/")
 
-                    all_tables.append(df)
+            # Save as Excel
+            output_filename = f"converted_{uuid.uuid4().hex[:8]}.xlsx"
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            for row in rows:
+                ws.append(row)
 
-        final_df = pd.concat(all_tables, ignore_index=True)
-        output_filename = f"converted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        output_path = os.path.join(DOWNLOAD_FOLDER, output_filename)
-        final_df.to_excel(output_path, index=False)
-
-        return send_file(output_path, as_attachment=True)
-
+            temp = BytesIO()
+            wb.save(temp)
+            temp.seek(0)
+            return send_file(
+                temp,
+                download_name=output_filename,
+                as_attachment=True,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
     except Exception as e:
-        print("Error processing file:", e)
-        flash("Something went wrong. Please try another file.")
+        flash(f"Error processing file: {str(e)}")
         return redirect("/")
 
 @app.route("/feedback", methods=["POST"])
