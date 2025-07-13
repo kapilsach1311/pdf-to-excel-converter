@@ -1,17 +1,16 @@
 from flask import Flask, render_template, request, send_file, redirect, flash
-import os
 import pdfplumber
-import pandas as pd
-from werkzeug.utils import secure_filename
-from datetime import datetime
+import openpyxl
+from io import BytesIO
+import uuid
+import os
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'  # For flashing messages
+app.secret_key = "your_secret_key"
 
-UPLOAD_FOLDER = 'uploads'
-DOWNLOAD_FOLDER = 'downloads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+@app.route("/")
+def index():
+    return render_template("index.html")
 
 @app.route("/upload", methods=["POST"])
 def upload_file():
@@ -32,7 +31,6 @@ def upload_file():
                 flash("No tables found in the PDF.")
                 return redirect("/")
 
-            # Save as Excel
             output_filename = f"converted_{uuid.uuid4().hex[:8]}.xlsx"
             wb = openpyxl.Workbook()
             ws = wb.active
@@ -42,12 +40,17 @@ def upload_file():
             temp = BytesIO()
             wb.save(temp)
             temp.seek(0)
+
             return send_file(
                 temp,
                 download_name=output_filename,
                 as_attachment=True,
                 mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+        else:
+            flash("Please upload a valid PDF file.")
+            return redirect("/")
+
     except Exception as e:
         flash(f"Error processing file: {str(e)}")
         return redirect("/")
@@ -56,16 +59,11 @@ def upload_file():
 def feedback():
     name = request.form.get("name")
     email = request.form.get("email")
-    message = request.form.get("feedback")
-    
-    with open("feedback_log.csv", "a", encoding='utf-8') as f:
-        f.write(f"{datetime.now()},{name},{email},{message}\n")
-
-    flash("✅ Thank you for your feedback!")
+    feedback_text = request.form.get("feedback")
+    print(f"Feedback from {name} <{email}>: {feedback_text}")
+    flash("Thank you for your feedback!")
     return redirect("/")
 
 if __name__ == "__main__":
-    os.makedirs("uploads", exist_ok=True)
-    os.makedirs("downloads", exist_ok=True)
     port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
