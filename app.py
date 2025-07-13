@@ -50,4 +50,5 @@ def upload():
                     all_tables.append(df)
 
         final_df = pd.concat(all_tables, ignore_index=True)
-        output_filename = f"con_
+        output_filename = f"converted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+
