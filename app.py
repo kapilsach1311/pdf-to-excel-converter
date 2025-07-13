@@ -40,15 +40,41 @@ def upload():
                 for table in tables:
                     df = pd.DataFrame(table)
                     df.replace('', None, inplace=True)
-                    df.dropna(how='all', axis=0, inplace=True)  # Remove blank rows
-                    df.dropna(how='all', axis=1, inplace=True)  # Remove blank columns
+                    df.dropna(how='all', axis=0, inplace=True)
+                    df.dropna(how='all', axis=1, inplace=True)
 
                     if df.shape[0] > 1:
-                        df.columns = df.iloc[0]  # Set first non-empty row as header
+                        df.columns = df.iloc[0]
                         df = df[1:]
 
                     all_tables.append(df)
 
         final_df = pd.concat(all_tables, ignore_index=True)
         output_filename = f"converted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        output_path = os.path.join(DOWNLOAD_FOLDER, output_filename)
+        final_df.to_excel(output_path, index=False)
 
+        return send_file(output_path, as_attachment=True)
+
+    except Exception as e:
+        print("Error processing file:", e)
+        flash("Something went wrong. Please try another file.")
+        return redirect("/")
+
+@app.route("/feedback", methods=["POST"])
+def feedback():
+    name = request.form.get("name")
+    email = request.form.get("email")
+    message = request.form.get("feedback")
+    
+    with open("feedback_log.csv", "a", encoding='utf-8') as f:
+        f.write(f"{datetime.now()},{name},{email},{message}\n")
+
+    flash("✅ Thank you for your feedback!")
+    return redirect("/")
+
+if __name__ == "__main__":
+    os.makedirs("uploads", exist_ok=True)
+    os.makedirs("downloads", exist_ok=True)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
