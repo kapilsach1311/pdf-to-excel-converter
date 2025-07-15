@@ -39,7 +39,20 @@ def upload():
                 # Remove repeated headers
                 if dataframes and table[0] == dataframes[-1].columns.tolist():
                     table = table[1:]
-                df = pd.DataFrame(table[1:], columns=table[0])
+                # Ensure unique column names
+columns = table[0]
+unique_columns = []
+seen = {}
+for col in columns:
+    if col in seen:
+        seen[col] += 1
+        unique_columns.append(f"{col}_{seen[col]}")
+    else:
+        seen[col] = 0
+        unique_columns.append(col)
+
+df = pd.DataFrame(table[1:], columns=unique_columns)
+
                 dataframes.append(df)
 
         if not dataframes:
