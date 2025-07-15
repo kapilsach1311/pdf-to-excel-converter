@@ -2,14 +2,9 @@ from flask import Flask, render_template, request, send_file, redirect
 import pdfplumber
 import pandas as pd
 import os
-from werkzeug.utils import secure_filename
+import uuid
 
 app = Flask(__name__)
-
-UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-STRIPE_PAYMENT_LINK = "https://buy.stripe.com/eVq4gz6zkdHKg179Tq5wI00"
 
 @app.route('/')
 def index():
@@ -17,60 +12,68 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    file = request.files['file']
-    if not file:
-        return "No file uploaded", 400
+    uploaded_file = request.files['file']
+    if uploaded_file.filename == '':
+        return 'No file selected'
 
-    filename = secure_filename(file.filename)
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
-    file.save(filepath)
+    temp_filename = f"{uuid.uuid4().hex}.pdf"
+    uploaded_file.save(temp_filename)
 
+    all_data = []
     try:
-        with pdfplumber.open(filepath) as pdf:
-            total_pages = len(pdf.pages)
+        with pdfplumber.open(temp_filename) as pdf:
+            if len(pdf.pages) > 10:
+                return redirect("https://buy.stripe.com/eVq4gz6zkdHKg179Tq5wI00")
 
-        if total_pages > 10:
-            return redirect(STRIPE_PAYMENT_LINK)
+            for page in pdf.pages:
+                try:
+                    table = page.extract_table()
+                    if table:
+                        # Ensure unique column names
+                        columns = table[0]
+                        unique_columns = []
+                        seen = {}
+                        for col in columns:
+                            if col in seen:
+                                seen[col] += 1
+                                unique_columns.append(f"{col}_{seen[col]}")
+                            else:
+                                seen[col] = 0
+                                unique_columns.append(col)
 
-        dataframes = []
-        for page in pdfplumber.open(filepath).pages:
-            table = page.extract_table()
-            if table:
-                # Remove repeated headers
-                if dataframes and table[0] == dataframes[-1].columns.tolist():
-                    table = table[1:]
-                # Ensure unique column names
-columns = table[0]
-unique_columns = []
-seen = {}
-for col in columns:
-    if col in seen:
-        seen[col] += 1
-        unique_columns.append(f"{col}_{seen[col]}")
-    else:
-        seen[col] = 0
-        unique_columns.append(col)
+                        df = pd.DataFrame(table[1:], columns=unique_columns)
 
-df = pd.DataFrame(table[1:], columns=unique_columns)
+                        # Convert number-like columns to numeric
+                        for col in df.columns:
+                            df[col] = pd.to_numeric(df[col].str.replace(',', '').str.replace('₹', '').str.strip(), errors='ignore')
 
-                dataframes.append(df)
+                        all_data.append(df)
+                except Exception as e:
+                    print(f"Error processing page: {e}")
 
-        if not dataframes:
-            return "No tables found in PDF.", 400
+        if not all_data:
+            os.remove(temp_filename)
+            return "No tables found in PDF"
 
-        final_df = pd.concat(dataframes, ignore_index=True)
+        combined_df = pd.concat(all_data, ignore_index=True)
+        output_filename = f"converted_{uuid.uuid4().hex}.xlsx"
+        combined_df.to_excel(output_filename, index=False)
 
-        # Try to convert numeric columns
-        for col in final_df.columns:
-            final_df[col] = pd.to_numeric(final_df[col].str.replace(',', ''), errors='ignore')
-
-        output_path = os.path.join(UPLOAD_FOLDER, "converted.xlsx")
-        final_df.to_excel(output_path, index=False)
-
-        return send_file(output_path, as_attachment=True)
+        os.remove(temp_filename)
+        return send_file(output_filename, as_attachment=True)
 
     except Exception as e:
+        os.remove(temp_filename)
         return f"Error processing file: {e}"
+
+@app.route('/feedback', methods=['POST'])
+def feedback():
+    name = request.form.get('name')
+    email = request.form.get('email')
+    feedback_text = request.form.get('feedback')
+
+    print(f"Feedback received from {name} ({email}): {feedback_text}")
+    return render_template('index.html', feedback_thankyou=True)
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=10000)
