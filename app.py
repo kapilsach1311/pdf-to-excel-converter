@@ -1,83 +1,94 @@
-from flask import Flask, render_template, request, send_file, redirect
+from flask import Flask, render_template, request, send_file, redirect, flash
 import pdfplumber
 import pandas as pd
+import tempfile
 import os
-import uuid
+from collections import Counter
 
 app = Flask(__name__)
+app.secret_key = "your_secret_key"
 
-@app.route('/')
+@app.route("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    uploaded_file = request.files['file']
-    if uploaded_file.filename == '':
-        return 'No file selected'
+@app.route("/upload", methods=["POST"])
+def upload_file():
+    if 'file' not in request.files:
+        flash("No file part")
+        return redirect("/")
+    file = request.files['file']
+    if file.filename == '':
+        flash("No selected file")
+        return redirect("/")
 
-    temp_filename = f"{uuid.uuid4().hex}.pdf"
-    uploaded_file.save(temp_filename)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp:
+        file.save(temp.name)
+        temp_filename = temp.name
 
-    all_data = []
-    try:
-        with pdfplumber.open(temp_filename) as pdf:
-    page_count = len(pdf.pages)
-    if page_count > 10:
-        os.remove(temp_filename)
-        return render_template("pay_prompt.html", page_count=page_count)
-
-     
-
-            for page in pdf.pages:
-                try:
-                    table = page.extract_table()
-                    if table:
-                        # Ensure unique column names
-                        columns = table[0]
-                        unique_columns = []
-                        seen = {}
-                        for col in columns:
-                            if col in seen:
-                                seen[col] += 1
-                                unique_columns.append(f"{col}_{seen[col]}")
-                            else:
-                                seen[col] = 0
-                                unique_columns.append(col)
-
-                        df = pd.DataFrame(table[1:], columns=unique_columns)
-
-                        # Convert number-like columns to numeric
-                        for col in df.columns:
-                            df[col] = pd.to_numeric(df[col].str.replace(',', '').str.replace('₹', '').str.strip(), errors='ignore')
-
-                        all_data.append(df)
-                except Exception as e:
-                    print(f"Error processing page: {e}")
-
-        if not all_data:
+    with pdfplumber.open(temp_filename) as pdf:
+        page_count = len(pdf.pages)
+        if page_count > 10:
             os.remove(temp_filename)
-            return "No tables found in PDF"
+            return render_template("pay_prompt.html", page_count=page_count)
 
-        combined_df = pd.concat(all_data, ignore_index=True)
-        output_filename = f"converted_{uuid.uuid4().hex}.xlsx"
-        combined_df.to_excel(output_filename, index=False)
+    try:
+        all_tables = []
+        header_counter = Counter()
+
+        with pdfplumber.open(temp_filename) as pdf:
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                for table in tables:
+                    if table and len(table) > 1:
+                        header = tuple(table[0])
+                        header_counter[header] += 1
+
+        most_common_header = header_counter.most_common(1)[0][0] if header_counter else None
+
+        with pdfplumber.open(temp_filename) as pdf:
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                for table in tables:
+                    if table:
+                        if tuple(table[0]) == most_common_header:
+                            data_rows = table[1:]
+                        else:
+                            data_rows = table
+                        for row in data_rows:
+                            all_tables.append(row)
 
         os.remove(temp_filename)
+
+        df = pd.DataFrame(all_tables)
+        df = df.dropna(how='all')
+
+        # Convert columns to numeric if possible
+        for col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='ignore')
+
+        output_filename = os.path.join(tempfile.gettempdir(), "converted.xlsx")
+        df.to_excel(output_filename, index=False, header=[str(h) for h in most_common_header] if most_common_header else True)
+
         return send_file(output_filename, as_attachment=True)
 
     except Exception as e:
         os.remove(temp_filename)
         return f"Error processing file: {e}"
 
-@app.route('/feedback', methods=['POST'])
+@app.route("/feedback", methods=["POST"])
 def feedback():
-    name = request.form.get('name')
-    email = request.form.get('email')
-    feedback_text = request.form.get('feedback')
-
+    name = request.form.get("name")
+    email = request.form.get("email")
+    feedback_text = request.form.get("feedback")
     print(f"Feedback received from {name} ({email}): {feedback_text}")
-    return render_template('index.html', feedback_thankyou=True)
+    flash("✅ Thank you for your feedback!")
+    return redirect("/")
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=10000)
+@app.route("/pay")
+def pay_redirect():
+    return redirect("https://buy.stripe.com/eVq4gz6zkdHKg179Tq5wI00")
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=True)
