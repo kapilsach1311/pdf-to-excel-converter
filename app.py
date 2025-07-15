@@ -22,8 +22,12 @@ def upload():
     all_data = []
     try:
         with pdfplumber.open(temp_filename) as pdf:
-            if len(pdf.pages) > 10:
-                return redirect("https://buy.stripe.com/eVq4gz6zkdHKg179Tq5wI00")
+    page_count = len(pdf.pages)
+    if page_count > 10:
+        os.remove(temp_filename)
+        return render_template("pay_prompt.html", page_count=page_count)
+
+     
 
             for page in pdf.pages:
                 try:
