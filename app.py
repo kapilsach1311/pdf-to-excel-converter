@@ -32,29 +32,39 @@ def upload_file():
             header_counts = {}
             cleaned_rows = []
 
-            # First pass to find most common header
+            # First pass to determine most common header
             for page in pdf.pages:
-                table = page.extract_table()
+                table = page.extract_table({
+                    "vertical_strategy": "lines",
+                    "horizontal_strategy": "lines",
+                    "snap_tolerance": 3,
+                    "join_tolerance": 3
+                })
                 if table and len(table) > 1:
                     header = tuple(table[0])
                     header_counts[header] = header_counts.get(header, 0) + 1
 
             most_common_header = max(header_counts, key=header_counts.get) if header_counts else None
 
-            # Second pass to collect only rows matching header
+            # Second pass to extract rows matching the most common header
             for page in pdf.pages:
-                table = page.extract_table()
+                table = page.extract_table({
+                    "vertical_strategy": "lines",
+                    "horizontal_strategy": "lines",
+                    "snap_tolerance": 3,
+                    "join_tolerance": 3
+                })
                 if table and len(table) > 1:
                     for row in table[1:]:
                         if most_common_header and len(row) == len(most_common_header):
                             cleaned_rows.append(row)
 
             if not cleaned_rows:
-                return "No clean table data found in the PDF."
+                return "No clean tabular data found in the PDF."
 
             df = pd.DataFrame(cleaned_rows)
 
-            # Format numeric columns safely
+            # Try to convert numeric fields
             for col in df.columns:
                 try:
                     df[col] = pd.to_numeric(
