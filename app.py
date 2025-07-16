@@ -1,94 +1,87 @@
-from flask import Flask, render_template, request, send_file, redirect, flash
+import os
 import pdfplumber
 import pandas as pd
-import tempfile
-import os
-from collections import Counter
+from flask import Flask, request, send_file, render_template, redirect
 
 app = Flask(__name__)
-app.secret_key = "your_secret_key"
+app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB
 
-@app.route("/")
+@app.route('/')
 def index():
-    return render_template("index.html")
+    return render_template('index.html')
 
-@app.route("/upload", methods=["POST"])
+@app.route('/upload', methods=['POST'])
 def upload_file():
-    if 'file' not in request.files:
-        flash("No file part")
-        return redirect("/")
     file = request.files['file']
-    if file.filename == '':
-        flash("No selected file")
-        return redirect("/")
+    email = request.form.get('email')
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp:
-        file.save(temp.name)
-        temp_filename = temp.name
+    if not file or not file.filename.endswith('.pdf'):
+        return "Invalid file format. Please upload a PDF."
 
-    with pdfplumber.open(temp_filename) as pdf:
-        page_count = len(pdf.pages)
-        if page_count > 10:
-            os.remove(temp_filename)
-            return render_template("pay_prompt.html", page_count=page_count)
+    temp_filename = f"/tmp/{file.filename}"
+    file.save(temp_filename)
+
+    output_filename = None
 
     try:
-        all_tables = []
-        header_counter = Counter()
-
         with pdfplumber.open(temp_filename) as pdf:
+            page_count = len(pdf.pages)
+            if page_count > 10:
+                return render_template("pay_prompt.html", page_count=page_count)
+
+            header_counts = {}
+            cleaned_rows = []
+
+            # First pass to find most common header
             for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    if table and len(table) > 1:
-                        header = tuple(table[0])
-                        header_counter[header] += 1
+                table = page.extract_table()
+                if table and len(table) > 1:
+                    header = tuple(table[0])
+                    header_counts[header] = header_counts.get(header, 0) + 1
 
-        most_common_header = header_counter.most_common(1)[0][0] if header_counter else None
+            most_common_header = max(header_counts, key=header_counts.get) if header_counts else None
 
-        with pdfplumber.open(temp_filename) as pdf:
+            # Second pass to collect only rows matching header
             for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    if table:
-                        if tuple(table[0]) == most_common_header:
-                            data_rows = table[1:]
-                        else:
-                            data_rows = table
-                        for row in data_rows:
-                            all_tables.append(row)
+                table = page.extract_table()
+                if table and len(table) > 1:
+                    for row in table[1:]:
+                        if most_common_header and len(row) == len(most_common_header):
+                            cleaned_rows.append(row)
 
-        os.remove(temp_filename)
+            if not cleaned_rows:
+                return "No clean table data found in the PDF."
 
-        df = pd.DataFrame(all_tables)
-        df = df.dropna(how='all')
+            df = pd.DataFrame(cleaned_rows)
 
-        # Convert columns to numeric if possible
-        for col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='ignore')
+            # Format numeric columns safely
+            for col in df.columns:
+                try:
+                    df[col] = pd.to_numeric(
+                        df[col].astype(str).str.replace(',', '').str.replace('₹', '').str.strip(),
+                        errors='ignore'
+                    )
+                except:
+                    pass
 
-        output_filename = os.path.join(tempfile.gettempdir(), "converted.xlsx")
-        df.to_excel(output_filename, index=False, header=[str(h) for h in most_common_header] if most_common_header else True)
-
-        return send_file(output_filename, as_attachment=True)
+            output_filename = f"/tmp/converted_{file.filename.replace('.pdf', '')}.xlsx"
+            df.to_excel(output_filename, index=False, header=[str(h) for h in most_common_header] if most_common_header else True)
 
     except Exception as e:
-        os.remove(temp_filename)
         return f"Error processing file: {e}"
 
-@app.route("/feedback", methods=["POST"])
-def feedback():
-    name = request.form.get("name")
-    email = request.form.get("email")
-    feedback_text = request.form.get("feedback")
-    print(f"Feedback received from {name} ({email}): {feedback_text}")
-    flash("✅ Thank you for your feedback!")
-    return redirect("/")
+    finally:
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
 
-@app.route("/pay")
+    if output_filename and os.path.exists(output_filename):
+        return send_file(output_filename, as_attachment=True)
+    else:
+        return "Conversion failed. Please try another file or contact support."
+
+@app.route('/pay')
 def pay_redirect():
     return redirect("https://buy.stripe.com/eVq4gz6zkdHKg179Tq5wI00")
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+if __name__ == '__main__':
+    app.run(host="0.0.0.0", port=10000, debug=True)
