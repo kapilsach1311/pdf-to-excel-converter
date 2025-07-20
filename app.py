@@ -27,4 +27,5 @@ def index():
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    if "file" not in request.
+   if "file" not in request.files:
+
