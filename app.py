@@ -34,8 +34,8 @@ def upload():
     if file.filename == "":
         flash("No selected file")
         return redirect("/")
-    if file and file.filename.endswith(".pdf"):
-        try:
-            output_filename = "converted.xlsx"
-            temp_pdf_path = "uploaded_temp.pdf"
-             file.save(temp_pdf_path)
+        if file and file.filename.endswith(".pdf"):
+    try:
+        output_filename = "converted.xlsx"
+        temp_pdf_path = "uploaded_temp.pdf"
+        file.save(temp_pdf_path)
