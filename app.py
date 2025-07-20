@@ -27,15 +27,4 @@ def index():
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    if "file" not in request.files:
-        flash("No file part")
-        return redirect("/")
-    file = request.files["file"]
-    if file.filename == "":
-        flash("No selected file")
-        return redirect("/")
-        if file and file.filename.endswith(".pdf"):
-    try:
-        output_filename = "converted.xlsx"
-        temp_pdf_path = "uploaded_temp.pdf"
-        file.save(temp_pdf_path)
+    if "file" not in request.
