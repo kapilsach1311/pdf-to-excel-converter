@@ -1,97 +1,89 @@
-import os
+from flask import Flask, render_template, request, send_file, redirect, flash
 import pdfplumber
 import pandas as pd
-from flask import Flask, request, send_file, render_template, redirect
+import os
+import re
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 20 * 1024 * 1024  # 20MB
+app.secret_key = "secret123"
 
-@app.route('/')
+VISITOR_FILE = "visitor_count.txt"
+FEEDBACK_FILE = "feedback.txt"
+
+def increment_visitor_count():
+    if not os.path.exists(VISITOR_FILE):
+        with open(VISITOR_FILE, "w") as f:
+            f.write("0")
+    with open(VISITOR_FILE, "r+") as f:
+        count = int(f.read().strip()) + 1
+        f.seek(0)
+        f.write(str(count))
+    return count
+
+@app.route("/", methods=["GET"])
 def index():
-    return render_template('index.html')
+    count = increment_visitor_count()
+    return render_template("index.html", visitor_count=count)
 
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    file = request.files['file']
-    email = request.form.get('email')
+@app.route("/upload", methods=["POST"])
+def upload():
+    if "file" not in request.files:
+        flash("No file part")
+        return redirect("/")
+    file = request.files["file"]
+    if file.filename == "":
+        flash("No selected file")
+        return redirect("/")
+    if file and file.filename.endswith(".pdf"):
+        try:
+            output_filename = "converted.xlsx"
+            repeated_headers = set()
+            dfs = []
 
-    if not file or not file.filename.endswith('.pdf'):
-        return "Invalid file format. Please upload a PDF."
+            with pdfplumber.open(file) as pdf:
+                for i, page in enumerate(pdf.pages):
+                    table = page.extract_table()
+                    if not table:
+                        continue
+                    df = pd.DataFrame(table[1:], columns=table[0])
 
-    temp_filename = f"/tmp/{file.filename}"
-    file.save(temp_filename)
+                    # Check and remove repeated headers
+                    header_signature = "|".join(df.columns)
+                    if header_signature in repeated_headers:
+                        continue
+                    repeated_headers.add(header_signature)
 
-    output_filename = None
+                    # Remove rows that are duplicate headers
+                    df = df[~df.apply(lambda row: all(cell in df.columns for cell in row), axis=1)]
 
-    try:
-        with pdfplumber.open(temp_filename) as pdf:
-            page_count = len(pdf.pages)
-            if page_count > 10:
-                return render_template("pay_prompt.html", page_count=page_count)
+                    # Convert number-looking columns to proper numeric
+                    for col in df.columns:
+                        df[col] = df[col].apply(lambda x: re.sub(r"[^\d\.\-]", "", str(x)))
+                        df[col] = pd.to_numeric(df[col], errors="ignore")
+                    dfs.append(df)
 
-            header_counts = {}
-            cleaned_rows = []
-
-            # First pass to determine most common header
-            for page in pdf.pages:
-                table = page.extract_table({
-                    "vertical_strategy": "lines",
-                    "horizontal_strategy": "lines",
-                    "snap_tolerance": 3,
-                    "join_tolerance": 3
-                })
-                if table and len(table) > 1:
-                    header = tuple(table[0])
-                    header_counts[header] = header_counts.get(header, 0) + 1
-
-            most_common_header = max(header_counts, key=header_counts.get) if header_counts else None
-
-            # Second pass to extract rows matching the most common header
-            for page in pdf.pages:
-                table = page.extract_table({
-                    "vertical_strategy": "lines",
-                    "horizontal_strategy": "lines",
-                    "snap_tolerance": 3,
-                    "join_tolerance": 3
-                })
-                if table and len(table) > 1:
-                    for row in table[1:]:
-                        if most_common_header and len(row) == len(most_common_header):
-                            cleaned_rows.append(row)
-
-            if not cleaned_rows:
-                return "No clean tabular data found in the PDF."
-
-            df = pd.DataFrame(cleaned_rows)
-
-            # Try to convert numeric fields
-            for col in df.columns:
-                try:
-                    df[col] = pd.to_numeric(
-                        df[col].astype(str).str.replace(',', '').str.replace('₹', '').str.strip(),
-                        errors='ignore'
-                    )
-                except:
-                    pass
-
-            output_filename = f"/tmp/converted_{file.filename.replace('.pdf', '')}.xlsx"
-            df.to_excel(output_filename, index=False, header=[str(h) for h in most_common_header] if most_common_header else True)
-
-    except Exception as e:
-        return f"Error processing file: {e}"
-
-    finally:
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
-
-    if output_filename and os.path.exists(output_filename):
-        return send_file(output_filename, as_attachment=True)
+            if not dfs:
+                flash("No tables found in PDF")
+                return redirect("/")
+            final_df = pd.concat(dfs, ignore_index=True)
+            final_df.to_excel(output_filename, index=False)
+            return send_file(output_filename, as_attachment=True)
+        except Exception as e:
+            flash(f"Error processing file: {str(e)}")
+            return redirect("/")
     else:
-        return "Conversion failed. Please try another file or contact support."
+        flash("Invalid file type. Please upload a PDF.")
+        return redirect("/")
 
-@app.route('/pay')
-def pay_redirect():
-    return redirect("https://buy.stripe.com/eVq4gz6zkdHKg179Tq5wI00")
+@app.route("/feedback", methods=["POST"])
+def feedback():
+    name = request.form.get("name")
+    email = request.form.get("email")
+    message = request.form.get("feedback")
+    with open(FEEDBACK_FILE, "a") as f:
+        f.write(f"{name} | {email} | {message}\n")
+    flash("✅ Thank you for your feedback!")
+    return redirect("/")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000, debug=True)
